@@ -146,31 +146,25 @@ def send_slack(title, link, content="", menu_names=None, image_urls=None):
         }
     ]
 
-    # 본문 내용 추가 (있을 때만 구분선 포함)
+    # 본문 + 메뉴를 하나의 섹션으로 (빈 줄로 구분)
+    text_parts = []
     if content:
-        blocks.append({"type": "divider"})
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": content
-            }
-        })
-
-    # 메뉴 목록 (· 로 구분, 한 줄)
+        text_parts.append(content)
     if menu_names:
-        menu_text = " · ".join(menu_names)
+        menu_text = "*" + " · ".join(menu_names) + "*"  # 굵게
+        text_parts.append(menu_text)
+
+    if text_parts:
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": menu_text
+                "text": "\n\n".join(text_parts)
             }
         })
 
     # 이미지 처리 (카카오 CDN은 Slack에서 직접 사용 불가 - 업로드 필요)
     if image_urls:
-        blocks.append({"type": "divider"})
         num_images = len(image_urls)
 
         # 1~3개: 원본 크기로 각각 업로드
@@ -263,6 +257,12 @@ def crawl_post_detail(page, post_id):
                     title = text;
                     break;
                 }
+            }
+
+            // 본문 가져오기 (desc_card 클래스)
+            const descCard = document.querySelector('.desc_card');
+            if (descCard) {
+                content = descCard.innerText.trim();
             }
 
             return { title, content };
