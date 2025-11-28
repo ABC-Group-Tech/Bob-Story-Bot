@@ -1,0 +1,50 @@
+name: Kakao Channel Crawler
+
+on:
+  schedule:
+    # 매일 평일(월~금) 한국시간 오전 10시, 11시, 12시에 실행
+    # UTC 기준: 01:00, 02:00, 03:00 (KST -9시간)
+    - cron: "0 1,2,3 * * 1-5"
+  workflow_dispatch:  # 수동 실행 버튼
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright browsers
+        run: playwright install chromium
+
+      - name: Run crawler
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python crawler.py
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_post.txt
+          git diff --staged --quiet || git commit -m "Update last_post.txt [skip ci]"
+          git push
