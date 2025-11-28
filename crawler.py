@@ -168,43 +168,60 @@ def send_slack(title, link, content="", menu_names=None, image_urls=None):
             }
         })
 
-    # 이미지 콜라주 생성 및 업로드
+    # 이미지 처리 (개수에 따라 다르게)
     if image_urls:
         blocks.append({"type": "divider"})
-        print(f"    이미지 {len(image_urls)}개로 콜라주 생성 중...")
+        num_images = len(image_urls)
 
-        # 콜라주 생성
-        collage = create_image_collage(image_urls)
-
-        if collage:
-            # 콜라주 업로드
-            collage_url = upload_image_to_host(collage)
-
-            if collage_url:
-                # 단일 콜라주 이미지 블록 추가
+        # 1~2개: 원본 이미지 직접 사용
+        if num_images <= 2:
+            print(f"    이미지 {num_images}개 - 원본 URL 사용")
+            for i, image_url in enumerate(image_urls):
+                # http -> https 변환
+                if image_url.startswith("http://"):
+                    image_url = image_url.replace("http://", "https://")
                 blocks.append({
                     "type": "image",
-                    "image_url": collage_url,
-                    "alt_text": f"메뉴 이미지 ({len(image_urls)}개)"
+                    "image_url": image_url,
+                    "alt_text": f"메뉴 이미지 {i+1}"
                 })
+
+        # 3개 이상: 콜라주로 합성
+        else:
+            print(f"    이미지 {num_images}개로 콜라주 생성 중...")
+
+            # 콜라주 생성
+            collage = create_image_collage(image_urls)
+
+            if collage:
+                # 콜라주 업로드
+                collage_url = upload_image_to_host(collage)
+
+                if collage_url:
+                    # 단일 콜라주 이미지 블록 추가
+                    blocks.append({
+                        "type": "image",
+                        "image_url": collage_url,
+                        "alt_text": f"메뉴 이미지 ({num_images}개)"
+                    })
+                else:
+                    # 업로드 실패 시 텍스트로 대체
+                    blocks.append({
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"_이미지 {num_images}개 (업로드 실패)_"
+                        }
+                    })
             else:
-                # 업로드 실패 시 텍스트로 대체
+                # 콜라주 생성 실패 시 텍스트로 대체
                 blocks.append({
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"_이미지 {len(image_urls)}개 (업로드 실패)_"
+                        "text": f"_이미지 {num_images}개 (콜라주 생성 실패)_"
                     }
                 })
-        else:
-            # 콜라주 생성 실패 시 텍스트로 대체
-            blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"_이미지 {len(image_urls)}개 (콜라주 생성 실패)_"
-                }
-            })
 
     # 구분선
     blocks.append({"type": "divider"})
