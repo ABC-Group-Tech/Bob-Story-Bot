@@ -143,12 +143,12 @@ def send_slack(title, link, content="", menu_names=None, image_urls=None):
                 "text": f"🍽️ {title}",
                 "emoji": True
             }
-        },
-        {"type": "divider"}
+        }
     ]
 
-    # 본문 내용 추가
+    # 본문 내용 추가 (있을 때만 구분선 포함)
     if content:
+        blocks.append({"type": "divider"})
         blocks.append({
             "type": "section",
             "text": {
@@ -168,59 +168,49 @@ def send_slack(title, link, content="", menu_names=None, image_urls=None):
             }
         })
 
-    # 이미지 처리 (개수에 따라 다르게)
+    # 이미지 처리 (카카오 CDN은 Slack에서 직접 사용 불가 - 업로드 필요)
     if image_urls:
         blocks.append({"type": "divider"})
         num_images = len(image_urls)
 
-        # 1~2개: 원본 이미지 직접 사용
-        if num_images <= 2:
-            print(f"    이미지 {num_images}개 - 원본 URL 사용")
-            for i, image_url in enumerate(image_urls):
-                # http -> https 변환
-                if image_url.startswith("http://"):
-                    image_url = image_url.replace("http://", "https://")
-                blocks.append({
-                    "type": "image",
-                    "image_url": image_url,
-                    "alt_text": f"메뉴 이미지 {i+1}"
-                })
+        # 1~3개: 원본 크기로 각각 업로드
+        if num_images <= 3:
+            print(f"    이미지 {num_images}개 - 원본 크기로 업로드 중...")
+            for i, url in enumerate(image_urls):
+                img = download_image(url)
+                if img:
+                    if img.mode in ('RGBA', 'P'):
+                        img = img.convert('RGB')
+                    uploaded_url = upload_image_to_host(img)
+                    if uploaded_url:
+                        blocks.append({
+                            "type": "image",
+                            "image_url": uploaded_url,
+                            "alt_text": f"메뉴 이미지 {i+1}"
+                        })
 
-        # 3개 이상: 콜라주로 합성
+        # 4개 이상: 콜라주로 합성
         else:
             print(f"    이미지 {num_images}개로 콜라주 생성 중...")
-
-            # 콜라주 생성
             collage = create_image_collage(image_urls)
 
             if collage:
-                # 콜라주 업로드
                 collage_url = upload_image_to_host(collage)
-
                 if collage_url:
-                    # 단일 콜라주 이미지 블록 추가
                     blocks.append({
                         "type": "image",
                         "image_url": collage_url,
                         "alt_text": f"메뉴 이미지 ({num_images}개)"
                     })
                 else:
-                    # 업로드 실패 시 텍스트로 대체
                     blocks.append({
                         "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": f"_이미지 {num_images}개 (업로드 실패)_"
-                        }
+                        "text": {"type": "mrkdwn", "text": f"_이미지 {num_images}개 (업로드 실패)_"}
                     })
             else:
-                # 콜라주 생성 실패 시 텍스트로 대체
                 blocks.append({
                     "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"_이미지 {num_images}개 (콜라주 생성 실패)_"
-                    }
+                    "text": {"type": "mrkdwn", "text": f"_이미지 {num_images}개 (콜라주 생성 실패)_"}
                 })
 
     payload = {
@@ -253,10 +243,10 @@ def crawl_post_detail(page, post_id):
     try:
         # 게시글 본문 영역에서 제목과 내용 가져오기
         post_data = page.evaluate("""() => {
-            // 제외할 키워드 목록
-            const excludeKeywords = ['QR', '프로필', '댓글', '소식', '채널홈',
+            // 제외할 키워드 목록 (제목이 아닌 UI 요소들)
+            const excludeKeywords = ['QR', '프로필', '댓글', '소식', '채널홈', '채널',
                                       '폰으로', '접속해보세요', '고정됨', '공유하기',
-                                      '좋아요', '카카오톡', '더보기'];
+                                      '좋아요', '카카오톡', '더보기', '주식회사', '공식채널'];
 
             const shouldExclude = (text) => {
                 return excludeKeywords.some(keyword => text.includes(keyword));
@@ -265,49 +255,13 @@ def crawl_post_detail(page, post_id):
             let title = '';
             let content = '';
 
-            // 방법 1: article 내부의 strong 태그에서 제목 찾기
-            const article = document.querySelector('article');
-            if (article) {
-                const strong = article.querySelector('strong');
-                if (strong) {
-                    const text = strong.innerText.trim();
-                    if (text && !shouldExclude(text)) {
-                        title = text;
-                    }
-                }
-
-                // article 내부의 텍스트 수집 (이미지, 제목 제외)
-                const textNodes = [];
-                const walker = document.createTreeWalker(
-                    article,
-                    NodeFilter.SHOW_TEXT,
-                    null,
-                    false
-                );
-                while (walker.nextNode()) {
-                    const text = walker.currentNode.textContent.trim();
-                    if (text && text.length > 2 &&
-                        text !== title && !shouldExclude(text)) {
-                        textNodes.push(text);
-                    }
-                }
-                if (textNodes.length > 0) {
-                    content = textNodes.slice(0, 5).join('\\n');
-                }
-            }
-
-            // 방법 2: article이 없으면 main에서 찾기
-            if (!title) {
-                const main = document.querySelector('main');
-                if (main) {
-                    const strongs = main.querySelectorAll('strong');
-                    for (const strong of strongs) {
-                        const text = strong.innerText.trim();
-                        if (text && !shouldExclude(text) && text.length > 1) {
-                            title = text;
-                            break;
-                        }
-                    }
+            // 모든 strong 태그에서 제목 찾기 (제외 키워드 없는 첫 번째)
+            const strongs = document.querySelectorAll('strong');
+            for (const strong of strongs) {
+                const text = strong.innerText.trim();
+                if (text && text.length > 1 && !shouldExclude(text)) {
+                    title = text;
+                    break;
                 }
             }
 
