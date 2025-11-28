@@ -50,4 +50,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add last_post.txt
           git diff --staged --quiet || git commit -m "Update last_post.txt [skip ci]"
+          git pull --rebase origin main
           git push
