@@ -100,26 +100,27 @@ def create_image_collage(image_urls, thumb_size=150, max_cols=4):
 
 
 def upload_image_to_host(image):
-    """이미지를 0x0.st에 업로드하고 URL 반환"""
+    """이미지를 catbox.moe에 업로드하고 URL 반환"""
     try:
         # 이미지를 바이트로 변환
         img_byte_arr = io.BytesIO()
         image.save(img_byte_arr, format='JPEG', quality=85)
         img_byte_arr.seek(0)
 
-        # 0x0.st에 업로드
+        # catbox.moe에 업로드
         response = requests.post(
-            'https://0x0.st',
-            files={'file': ('collage.jpg', img_byte_arr, 'image/jpeg')},
-            timeout=30
+            'https://catbox.moe/user/api.php',
+            data={'reqtype': 'fileupload'},
+            files={'fileToUpload': ('collage.jpg', img_byte_arr, 'image/jpeg')},
+            timeout=60
         )
 
-        if response.status_code == 200:
+        if response.status_code == 200 and response.text.startswith('https://'):
             url = response.text.strip()
             print(f"    이미지 업로드 성공: {url}")
             return url
         else:
-            print(f"    이미지 업로드 실패: {response.status_code}")
+            print(f"    이미지 업로드 실패: {response.status_code} - {response.text}")
     except Exception as e:
         print(f"    이미지 업로드 오류: {e}")
 
@@ -139,10 +140,11 @@ def send_slack(title, link, content="", menu_names=None, image_urls=None):
             "type": "header",
             "text": {
                 "type": "plain_text",
-                "text": f"📢 {title}",
+                "text": f"🍽️ {title}",
                 "emoji": True
             }
-        }
+        },
+        {"type": "divider"}
     ]
 
     # 본문 내용 추가
@@ -155,11 +157,9 @@ def send_slack(title, link, content="", menu_names=None, image_urls=None):
             }
         })
 
-    # 메뉴 목록 텍스트로 표시
+    # 메뉴 목록 (· 로 구분, 한 줄)
     if menu_names:
-        blocks.append({"type": "divider"})
-        menu_text = "*🍽️ 오늘의 메뉴*\n"
-        menu_text += " • ".join(menu_names)
+        menu_text = " · ".join(menu_names)
         blocks.append({
             "type": "section",
             "text": {
@@ -223,40 +223,9 @@ def send_slack(title, link, content="", menu_names=None, image_urls=None):
                     }
                 })
 
-    # 구분선
-    blocks.append({"type": "divider"})
-
-    # 링크 버튼 추가
-    blocks.append({
-        "type": "actions",
-        "elements": [
-            {
-                "type": "button",
-                "text": {
-                    "type": "plain_text",
-                    "text": "전체 보기",
-                    "emoji": True
-                },
-                "url": link,
-                "style": "primary"
-            }
-        ]
-    })
-
-    # 채널 정보
-    blocks.append({
-        "type": "context",
-        "elements": [
-            {
-                "type": "mrkdwn",
-                "text": "주식회사 밥스토리 | 카카오톡 채널"
-            }
-        ]
-    })
-
     payload = {
         "blocks": blocks,
-        "text": f"새 카카오톡 소식: {title}"  # fallback text
+        "text": f"🍽️ {title}"  # fallback text
     }
 
     response = requests.post(WEBHOOK_URL, json=payload)
