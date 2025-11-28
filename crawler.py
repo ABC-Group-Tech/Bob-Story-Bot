@@ -80,21 +80,29 @@ def send_slack(title, link, content="", menu_items=None):
                 }
             })
 
-        # 대표 이미지 1개 표시 (첫 번째 메뉴 이미지)
-        # Slack은 http 이미지를 지원하지 않을 수 있으므로 https로 변환
+        # 이미지들을 개별 섹션으로 표시 (최대 3개)
+        image_count = 0
         for item in menu_items:
-            if item.get("image_url"):
+            if item.get("image_url") and image_count < 3:
                 image_url = item["image_url"]
                 # http -> https 변환
                 if image_url.startswith("http://"):
                     image_url = image_url.replace("http://", "https://")
 
+                # section with accessory image 사용
                 blocks.append({
-                    "type": "image",
-                    "image_url": image_url,
-                    "alt_text": item.get("name", "메뉴 이미지")
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*{item.get('name', '메뉴')}*"
+                    },
+                    "accessory": {
+                        "type": "image",
+                        "image_url": image_url,
+                        "alt_text": item.get("name", "메뉴 이미지")
+                    }
                 })
-                break  # 첫 번째 이미지만
+                image_count += 1
 
     # 구분선
     blocks.append({"type": "divider"})
@@ -131,6 +139,10 @@ def send_slack(title, link, content="", menu_items=None):
         "blocks": blocks,
         "text": f"새 카카오톡 소식: {title}"  # fallback text
     }
+
+    # 디버깅용 payload 출력
+    import json
+    print(f"Slack payload: {json.dumps(payload, ensure_ascii=False, indent=2)[:500]}...")
 
     response = requests.post(WEBHOOK_URL, json=payload)
     if response.status_code == 200:
