@@ -7,8 +7,10 @@
 
 import os
 import sys
-import re
+import io
+import math
 import requests
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
 # UTF-8 출력 설정
@@ -36,8 +38,96 @@ def save_last_post(post_id):
         f.write(post_id)
 
 
+def download_image(url):
+    """URL에서 이미지 다운로드"""
+    try:
+        # http -> https 변환
+        if url.startswith("http://"):
+            url = url.replace("http://", "https://")
+
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            return Image.open(io.BytesIO(response.content))
+    except Exception as e:
+        print(f"    이미지 다운로드 실패: {e}")
+    return None
+
+
+def create_image_collage(image_urls, thumb_size=150, max_cols=4):
+    """여러 이미지를 하나의 콜라주로 합성"""
+    images = []
+
+    # 이미지 다운로드
+    for url in image_urls:
+        img = download_image(url)
+        if img:
+            # RGB로 변환 (RGBA인 경우)
+            if img.mode in ('RGBA', 'P'):
+                img = img.convert('RGB')
+            # 썸네일 크기로 리사이즈
+            img.thumbnail((thumb_size, thumb_size), Image.Resampling.LANCZOS)
+            images.append(img)
+
+    if not images:
+        return None
+
+    # 그리드 계산
+    num_images = len(images)
+    cols = min(num_images, max_cols)
+    rows = math.ceil(num_images / cols)
+
+    # 캔버스 생성 (흰색 배경)
+    canvas_width = cols * thumb_size
+    canvas_height = rows * thumb_size
+    collage = Image.new('RGB', (canvas_width, canvas_height), (255, 255, 255))
+
+    # 이미지 배치
+    for idx, img in enumerate(images):
+        row = idx // cols
+        col = idx % cols
+
+        # 이미지 중앙 정렬
+        x_offset = (thumb_size - img.width) // 2
+        y_offset = (thumb_size - img.height) // 2
+
+        x = col * thumb_size + x_offset
+        y = row * thumb_size + y_offset
+
+        collage.paste(img, (x, y))
+
+    return collage
+
+
+def upload_image_to_host(image):
+    """이미지를 0x0.st에 업로드하고 URL 반환"""
+    try:
+        # 이미지를 바이트로 변환
+        img_byte_arr = io.BytesIO()
+        image.save(img_byte_arr, format='JPEG', quality=85)
+        img_byte_arr.seek(0)
+
+        # 0x0.st에 업로드
+        response = requests.post(
+            'https://0x0.st',
+            files={'file': ('collage.jpg', img_byte_arr, 'image/jpeg')},
+            timeout=30
+        )
+
+        if response.status_code == 200:
+            url = response.text.strip()
+            print(f"    이미지 업로드 성공: {url}")
+            return url
+        else:
+            print(f"    이미지 업로드 실패: {response.status_code}")
+    except Exception as e:
+        print(f"    이미지 업로드 오류: {e}")
+
+    return None
+
+
 def send_slack(title, link, content="", menu_names=None, image_urls=None):
-    """Slack 알림 보내기 (전체 내용 + 메뉴 이미지 포함)"""
+    """Slack 알림 보내기 (전체 내용 + 메뉴 이미지 콜라주 포함)"""
     if menu_names is None:
         menu_names = []
     if image_urls is None:
@@ -78,18 +168,42 @@ def send_slack(title, link, content="", menu_names=None, image_urls=None):
             }
         })
 
-    # 이미지들 나열 (모두 표시)
+    # 이미지 콜라주 생성 및 업로드
     if image_urls:
         blocks.append({"type": "divider"})
-        for i, image_url in enumerate(image_urls):
-            # http -> https 변환
-            if image_url.startswith("http://"):
-                image_url = image_url.replace("http://", "https://")
+        print(f"    이미지 {len(image_urls)}개로 콜라주 생성 중...")
 
+        # 콜라주 생성
+        collage = create_image_collage(image_urls)
+
+        if collage:
+            # 콜라주 업로드
+            collage_url = upload_image_to_host(collage)
+
+            if collage_url:
+                # 단일 콜라주 이미지 블록 추가
+                blocks.append({
+                    "type": "image",
+                    "image_url": collage_url,
+                    "alt_text": f"메뉴 이미지 ({len(image_urls)}개)"
+                })
+            else:
+                # 업로드 실패 시 텍스트로 대체
+                blocks.append({
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"_이미지 {len(image_urls)}개 (업로드 실패)_"
+                    }
+                })
+        else:
+            # 콜라주 생성 실패 시 텍스트로 대체
             blocks.append({
-                "type": "image",
-                "image_url": image_url,
-                "alt_text": f"메뉴 이미지 {i+1}"
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"_이미지 {len(image_urls)}개 (콜라주 생성 실패)_"
+                }
             })
 
     # 구분선
@@ -153,39 +267,61 @@ def crawl_post_detail(page, post_id):
     try:
         # 게시글 본문 영역에서 제목과 내용 가져오기
         post_data = page.evaluate("""() => {
-            const main = document.querySelector('main');
-            if (!main) return { title: '', content: '' };
+            // 제외할 키워드 목록
+            const excludeKeywords = ['QR', '프로필', '댓글', '소식', '채널홈',
+                                      '폰으로', '접속해보세요', '고정됨', '공유하기',
+                                      '좋아요', '카카오톡', '더보기'];
 
-            // 모든 strong 태그 찾기
-            const strongs = main.querySelectorAll('strong');
+            const shouldExclude = (text) => {
+                return excludeKeywords.some(keyword => text.includes(keyword));
+            };
+
             let title = '';
             let content = '';
 
-            for (const strong of strongs) {
-                const text = strong.innerText.trim();
-                // QR 코드, 프로필 등 제외하고 실제 게시글 제목 찾기
-                if (text && !text.includes('QR') && !text.includes('프로필') &&
-                    !text.includes('댓글') && !text.includes('소식') &&
-                    !text.includes('채널')) {
-                    title = text;
+            // 방법 1: article 내부의 strong 태그에서 제목 찾기
+            const article = document.querySelector('article');
+            if (article) {
+                const strong = article.querySelector('strong');
+                if (strong) {
+                    const text = strong.innerText.trim();
+                    if (text && !shouldExclude(text)) {
+                        title = text;
+                    }
+                }
 
-                    // 제목 다음 형제/부모 요소에서 본문 찾기
-                    const parent = strong.parentElement;
-                    if (parent) {
-                        const nextDiv = parent.nextElementSibling;
-                        if (nextDiv) {
-                            const contentText = nextDiv.innerText.trim();
-                            // 필터링: QR, 채널홈, 폰으로 접속 등 제외
-                            if (contentText &&
-                                !contentText.includes('채널홈') &&
-                                !contentText.includes('QR') &&
-                                !contentText.includes('폰으로') &&
-                                !contentText.includes('접속해보세요')) {
-                                content = contentText;
-                            }
+                // article 내부의 텍스트 수집 (이미지, 제목 제외)
+                const textNodes = [];
+                const walker = document.createTreeWalker(
+                    article,
+                    NodeFilter.SHOW_TEXT,
+                    null,
+                    false
+                );
+                while (walker.nextNode()) {
+                    const text = walker.currentNode.textContent.trim();
+                    if (text && text.length > 2 &&
+                        text !== title && !shouldExclude(text)) {
+                        textNodes.push(text);
+                    }
+                }
+                if (textNodes.length > 0) {
+                    content = textNodes.slice(0, 5).join('\\n');
+                }
+            }
+
+            // 방법 2: article이 없으면 main에서 찾기
+            if (!title) {
+                const main = document.querySelector('main');
+                if (main) {
+                    const strongs = main.querySelectorAll('strong');
+                    for (const strong of strongs) {
+                        const text = strong.innerText.trim();
+                        if (text && !shouldExclude(text) && text.length > 1) {
+                            title = text;
+                            break;
                         }
                     }
-                    break;
                 }
             }
 
