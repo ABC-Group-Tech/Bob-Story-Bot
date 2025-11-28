@@ -36,10 +36,12 @@ def save_last_post(post_id):
         f.write(post_id)
 
 
-def send_slack(title, link, content="", menu_items=None):
+def send_slack(title, link, content="", menu_names=None, image_urls=None):
     """Slack 알림 보내기 (전체 내용 + 메뉴 이미지 포함)"""
-    if menu_items is None:
-        menu_items = []
+    if menu_names is None:
+        menu_names = []
+    if image_urls is None:
+        image_urls = []
 
     # Block Kit 형식으로 메시지 구성
     blocks = [
@@ -63,46 +65,32 @@ def send_slack(title, link, content="", menu_items=None):
             }
         })
 
-    # 구분선
-    if menu_items:
+    # 메뉴 목록 텍스트로 표시
+    if menu_names:
         blocks.append({"type": "divider"})
-
-        # 메뉴 목록 텍스트로 표시
         menu_text = "*🍽️ 오늘의 메뉴*\n"
-        menu_names = [item["name"] for item in menu_items if item.get("name")]
-        if menu_names:
-            menu_text += " • ".join(menu_names)
+        menu_text += " • ".join(menu_names)
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": menu_text
+            }
+        })
+
+    # 이미지들 나열 (모두 표시)
+    if image_urls:
+        blocks.append({"type": "divider"})
+        for i, image_url in enumerate(image_urls):
+            # http -> https 변환
+            if image_url.startswith("http://"):
+                image_url = image_url.replace("http://", "https://")
+
             blocks.append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": menu_text
-                }
+                "type": "image",
+                "image_url": image_url,
+                "alt_text": f"메뉴 이미지 {i+1}"
             })
-
-        # 이미지들을 개별 섹션으로 표시 (최대 3개)
-        image_count = 0
-        for item in menu_items:
-            if item.get("image_url") and image_count < 3:
-                image_url = item["image_url"]
-                # http -> https 변환
-                if image_url.startswith("http://"):
-                    image_url = image_url.replace("http://", "https://")
-
-                # section with accessory image 사용
-                blocks.append({
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*{item.get('name', '메뉴')}*"
-                    },
-                    "accessory": {
-                        "type": "image",
-                        "image_url": image_url,
-                        "alt_text": item.get("name", "메뉴 이미지")
-                    }
-                })
-                image_count += 1
 
     # 구분선
     blocks.append({"type": "divider"})
@@ -140,10 +128,6 @@ def send_slack(title, link, content="", menu_items=None):
         "text": f"새 카카오톡 소식: {title}"  # fallback text
     }
 
-    # 디버깅용 payload 출력
-    import json
-    print(f"Slack payload: {json.dumps(payload, ensure_ascii=False, indent=2)[:500]}...")
-
     response = requests.post(WEBHOOK_URL, json=payload)
     if response.status_code == 200:
         print(f"Slack 전송 성공: {title}")
@@ -162,73 +146,94 @@ def crawl_post_detail(page, post_id):
     result = {
         "title": "",
         "content": "",
-        "menu_items": []
+        "menu_names": [],
+        "image_urls": []
     }
 
     try:
-        # 제목 가져오기
-        title_elem = page.query_selector("strong")
-        if title_elem:
-            result["title"] = title_elem.inner_text().strip()
+        # 게시글 본문 영역에서 제목과 내용 가져오기
+        post_data = page.evaluate("""() => {
+            const main = document.querySelector('main');
+            if (!main) return { title: '', content: '' };
 
-        # 본문 내용 가져오기 (제목 다음의 텍스트들)
-        content_parts = page.evaluate("""() => {
-            const container = document.querySelector('main');
-            if (!container) return [];
+            // 모든 strong 태그 찾기
+            const strongs = main.querySelectorAll('strong');
+            let title = '';
+            let content = '';
 
-            // 첫 번째 generic/div 안의 텍스트들 찾기
-            const textElements = container.querySelectorAll('div > div > div');
-            const texts = [];
+            for (const strong of strongs) {
+                const text = strong.innerText.trim();
+                // QR 코드, 프로필 등 제외하고 실제 게시글 제목 찾기
+                if (text && !text.includes('QR') && !text.includes('프로필') &&
+                    !text.includes('댓글') && !text.includes('소식') &&
+                    !text.includes('채널')) {
+                    title = text;
 
-            for (const el of textElements) {
-                // strong(제목)이 아니고, 이미지 컨테이너가 아닌 텍스트
-                if (!el.querySelector('strong') && !el.querySelector('img')) {
-                    const text = el.innerText.trim();
-                    if (text && text.length > 0 && !text.includes('댓글') &&
-                        !text.includes('좋아요') && !text.includes('공유') &&
-                        !text.includes('프로필') && !text.includes('채널')) {
-                        texts.push(text);
+                    // 제목 다음 형제/부모 요소에서 본문 찾기
+                    const parent = strong.parentElement;
+                    if (parent) {
+                        const nextDiv = parent.nextElementSibling;
+                        if (nextDiv) {
+                            const contentText = nextDiv.innerText.trim();
+                            // 필터링: QR, 채널홈, 폰으로 접속 등 제외
+                            if (contentText &&
+                                !contentText.includes('채널홈') &&
+                                !contentText.includes('QR') &&
+                                !contentText.includes('폰으로') &&
+                                !contentText.includes('접속해보세요')) {
+                                content = contentText;
+                            }
+                        }
                     }
+                    break;
                 }
             }
-            return texts;
+
+            return { title, content };
         }""")
 
-        # 본문 텍스트 조합
-        if content_parts:
-            # 첫 번째 의미있는 텍스트 블록 찾기
-            for part in content_parts:
-                if len(part) > 10:  # 의미있는 길이의 텍스트
-                    result["content"] = part
-                    break
+        result["title"] = post_data.get("title", "")
+        result["content"] = post_data.get("content", "")
 
-        # 메뉴 이미지와 이름 가져오기
-        menu_data = page.evaluate("""() => {
-            const items = [];
-            const menuContainers = document.querySelectorAll('div');
+        # 메뉴 이름들 가져오기 (p 태그에서)
+        menu_names = page.evaluate("""() => {
+            const names = [];
+            const paragraphs = document.querySelectorAll('p');
 
-            for (const container of menuContainers) {
-                const img = container.querySelector('img[alt="이미지"]');
-                const paragraph = container.querySelector('p');
-
-                if (img && paragraph) {
-                    const src = img.src;
-                    const name = paragraph.innerText.trim();
-
+            for (const p of paragraphs) {
+                const text = p.innerText.trim();
+                // 짧은 메뉴 이름만 (1~10자)
+                if (text && text.length >= 1 && text.length <= 15 &&
+                    !text.includes('채널') && !text.includes('댓글') &&
+                    !text.includes('접속') && !text.includes('폰으로')) {
                     // 중복 체크
-                    if (src && name && !items.some(i => i.name === name)) {
-                        items.push({
-                            image_url: src,
-                            name: name
-                        });
+                    if (!names.includes(text)) {
+                        names.push(text);
                     }
                 }
             }
-            return items;
+            return names;
         }""")
 
-        if menu_data:
-            result["menu_items"] = menu_data
+        result["menu_names"] = menu_names
+
+        # 이미지 URL들 가져오기 (중복 제거)
+        image_urls = page.evaluate("""() => {
+            const urls = [];
+            const seenUrls = new Set();
+            const images = document.querySelectorAll('img[alt="이미지"]');
+
+            for (const img of images) {
+                const src = img.src;
+                if (src && !seenUrls.has(src)) {
+                    seenUrls.add(src);
+                    urls.push(src);
+                }
+            }
+            return urls;
+        }""")
+
+        result["image_urls"] = image_urls
 
     except Exception as e:
         print(f"  상세 크롤링 오류: {e}")
@@ -311,12 +316,19 @@ def crawl_and_send_new_posts(new_posts):
             # 상세 페이지 크롤링
             detail = crawl_post_detail(page, post["id"])
 
+            # 디버깅 출력
+            print(f"    제목: {detail.get('title', 'N/A')}")
+            print(f"    본문: {detail.get('content', 'N/A')[:50]}...")
+            print(f"    메뉴: {len(detail.get('menu_names', []))}개")
+            print(f"    이미지: {len(detail.get('image_urls', []))}개")
+
             # Slack 전송
             send_slack(
                 title=detail.get("title") or post["title"],
                 link=post["link"],
                 content=detail.get("content", ""),
-                menu_items=detail.get("menu_items", [])
+                menu_names=detail.get("menu_names", []),
+                image_urls=detail.get("image_urls", [])
             )
 
         browser.close()
