@@ -2,12 +2,12 @@ name: Kakao Channel Crawler
 
 on:
   schedule:
-    # 평일(월~금) 한국시간 오전 10시, 11시, 11시 30분에 실행
-    # UTC 기준: 01:00, 02:00, 02:30 (KST = UTC + 9)
-    # 참고: GitHub Actions schedule은 최대 15분 지연될 수 있음
-    - cron: "0 1 * * 1-5"   # 10:00 KST (월~금)
-    - cron: "0 2 * * 1-5"   # 11:00 KST (월~금)
-    - cron: "30 2 * * 1-5"  # 11:30 KST (월~금)
+    # 평일(월~금) 한국시간 오전 10시, 11시, 11시 30분 목표
+    # GitHub Actions 스케줄 지연(최대 1시간+)을 감안하여 앞당김
+    # 비정각 시간으로 설정하여 서버 혼잡 회피
+    - cron: "7 0 * * 1-5"   # 09:07 KST → 목표 10:00 KST
+    - cron: "13 1 * * 1-5"  # 10:13 KST → 목표 11:00 KST
+    - cron: "37 1 * * 1-5"  # 10:37 KST → 목표 11:30 KST
   workflow_dispatch:  # 수동 실행 버튼
 
 # 동시 실행 방지
